@@ -402,8 +402,8 @@
             try {
                 // 原有 approved 資料抓取
                 const [drinkRes, eventRes] = await Promise.all([
-                    supabaseClient.from('drink_submissions').select('*').eq('status', 'approved'),
-                    supabaseClient.from('event_submissions').select('*').eq('status', 'approved')
+                    supabase.from('drink_submissions').select('*').eq('status', 'approved'),
+                    supabase.from('event_submissions').select('*').eq('status', 'approved')
                 ]);
 
                 allDrinks = drinkRes.data || [];
@@ -424,7 +424,7 @@
         async function loadAndMergeLikes() {
             try {
                 // 單獨讀取讚數資料表
-                const { data: rawLikes, error } = await supabaseClient
+                const { data: rawLikes, error } = await supabase
                     .from('drink_likes_counter')
                     .select('*');
                 
@@ -447,9 +447,9 @@
         async function fetchPendingData() {
             try {
                 const [drinkPend, eventPend, issuePend] = await Promise.all([
-                    supabaseClient.from('drink_submissions').select('*').eq('status', 'pending'),
-                    supabaseClient.from('event_submissions').select('*').eq('status', 'pending'),
-                    supabaseClient.from('issue_reports').select('*').eq('status', 'pending')
+                    supabase.from('drink_submissions').select('*').eq('status', 'pending'),
+                    supabase.from('event_submissions').select('*').eq('status', 'pending'),
+                    supabase.from('issue_reports').select('*').eq('status', 'pending')
                 ]);
 
                 const drinks = (drinkPend.data || []).map(item => ({
@@ -1173,7 +1173,7 @@
                 }
         
                 // 改為一律寫入 issue_reports 表
-                const { error } = await supabaseClient.from('issue_reports').insert([payload]);
+                const { error } = await supabase.from('issue_reports').insert([payload]);
                 
                 if (error) throw error;
         
@@ -1404,7 +1404,7 @@
                     payload.event_detail = document.getElementById('issueEventDetail').value.trim() || null;
                 }
 
-                const { error } = await supabaseClient.from('issue_reports').insert([payload]);
+                const { error } = await supabase.from('issue_reports').insert([payload]);
                 if (error) throw error;
 
                 alert("🚨 勘誤回報成功！管理員已收到修正資訊。");
@@ -1693,7 +1693,7 @@
         
             try {
                 // 3. 嘗試直接更新讚數表
-                const { data, error: updateError } = await supabaseClient
+                const { data, error: updateError } = await supabase
                     .from('drink_likes_counter')
                     .update({ likes: drink.likes })
                     .eq('id', id)
@@ -1703,7 +1703,7 @@
                 
                 // 4. 如果更新後發現沒這筆資料 (代表是第一次有人對這品項按讚)，則進行全新插入
                 if (!data || data.length === 0) {
-                    const { error: insertError } = await supabaseClient
+                    const { error: insertError } = await supabase
                         .from('drink_likes_counter')
                         .insert([{ id: id, likes: drink.likes }]);
                     
