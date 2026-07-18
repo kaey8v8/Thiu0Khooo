@@ -30,7 +30,7 @@
     { "icon": "🚨", "text": "如果發現有誤再麻煩好心人送出勘誤資訊，管理員會盡快處理。", "isRed": false },
     { "icon": "⚠️", "text": "本資料表為多人心血，請勿用於營利。", "isRed": true },
     { "icon": "⚠️", "text": "本資料與官方無關。", "isRed": true },
-    { "icon": "🙏", "text": "時間問題暫不開放自行註冊，如有意願協助當管理員的話，麻煩聯繫:kaey4268@gmail.com", "isRed": true }
+    { "icon": "🙏", "text": "時間問題暫不開放自行註冊，<span class=\"text-blue-600 font-bold\">如有意願協助當管理員的話，麻煩聯繫:kaey4268@gmail.com</span>", "isRed": false }
   ],
   "discounts": [
     { "type": "指定飲料", "value": "任選 2 件 0 元 🎉" },
