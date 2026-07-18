@@ -1443,22 +1443,17 @@
                 eventSchedulesData = await response.json();
                 console.log("🎯 成功從 GitHub 載入完整活動資訊表");
             } catch (error) {
-                console.error("無法載入活動資訊表，啟用在地緊急預備值", error);
+                console.error("無法載入活動資訊表", error);
                 // 至少提供一筆基本時程
                 eventSchedulesData = {
-                    title: "7-11 天天抽飲料 ~ 9/1",
-                    links: { "line": "https://wooo.tw/qFjU69V", "app": "https://wooo.tw/PRckgXA" },
-                    timelines: [{ "end": "2026-09-01T19:00:00", "activeStr": "9/1(19:00)", "redeemStr": "9/1(23:59)" }],
+                    title: "活動資訊表載入失敗，請檢查網路連線",
+                    links: { "line": "#", "app": "#" },
+                    timelines: [],
                     partner_activities: [],
-                    notices: [
-                        { "icon": "💡", "text": "確認金額、品項、抽抽樂折扣沒問題，再出示各種支付方式給店員刷。", "isRed": false },
-                        { "icon": "🚨", "text": "如果發現有誤再麻煩好心人送出勘誤資訊，管理員會盡快處理。", "isRed": false },
-                        { "icon": "⚠️", "text": "本資料表為多人心血，請勿用於營利。", "isRed": true },
-                        { "icon": "⚠️", "text": "本資料與官方無關。", "isRed": true },
-                        { "icon": "🙏", "text": "時間問題暫不開放自行註冊，如有意願協助當管理員的話，麻煩聯繫:kaey4268@gmail.com", "isRed": true }
-                    ],
+                    notices: [],
                     discounts: [],
-                    point_rewards: []
+                    point_rewards: [],
+                    excluded_categories: []
                 };
             }
         }
