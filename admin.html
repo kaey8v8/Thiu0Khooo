@@ -905,6 +905,11 @@
             if (!confirm("確定要將此新投稿核可正式上架嗎？")) return;
             
             const report = allPendingItems.find(i => i.id === reportId);
+            if (!report) return;
+            // 取得當前登入的管理員資料 (假設 metadata 存有名稱，若無則改用 email)
+            const { data: { user } } = await supabaseClient.auth.getUser();
+            const adminName = user?.user_metadata?.name || user?.email || "管理員";
+            
             const targetTable = report.target_type === 'drink' ? 'drink_submissions' : 'event_submissions';
             
             const newEntry = report.target_type === 'drink' ? {
@@ -913,32 +918,43 @@
                 category_tags: report.drink_category_tags,
                 remark: report.drink_remark,
                 user_name: report.user_name,
+                admin_name: adminName,
                 status: 'approved'
             } : {
                 brand: report.event_brand,
                 url: report.event_url,
                 detail: report.event_detail,
                 user_name: report.user_name,
+                admin_name: adminName,
                 status: 'approved'
             };
         
             try {
-                    // 1. 插入到正式表
-                    await supabase.from(targetTable).insert([newEntry]);
-                    
-                    // 2. 將報告狀態改為 'approved' (或者直接刪除該行)
-                    // 注意：這裡改用 .delete() 比較乾淨，直接從佇列移除
-                    await supabase.from('issue_reports').delete().eq('id', reportId);
-                    const { error } = await supabase
-                            .from('issue_reports')
-                            .delete()
-                            .eq('id', reportId);
-                    
-                    if (error) throw error; // 確保有拋出錯誤讓你知道發生什麼事
-                    alert("核可成功！");
-                    refreshAllData(); // 重新整理後，佇列就會消失
-                } catch (e) { alert("入庫失敗：" + e.message); }
+                // 插入到正式表
+                const { error: insertError } = await supabaseClient
+                    .from(targetTable)
+                    .insert([newEntry]);
+                
+                if (insertError) throw insertError; // 檢查插入是否成功
+            
+                // 將狀態改為 'approved'
+                const { error: updateError } = await supabaseClient
+                    .from('issue_reports')
+                    .update({ 
+                        status: 'approved',
+                        admin_name: adminName // 記錄是誰核可的
+                    })
+                    .eq('id', reportId);
+                
+                if (updateError) throw updateError; // 檢查更新是否成功
+                
+                alert("核可成功！紀錄已保留。");
+                refreshAllData(); // 重新整理後，fetchPendingData 只抓 status='pending'，已核可的會自動從待審清單消失
+            } catch (e) { 
+                console.error(e);
+                alert("入庫失敗：" + e.message); 
             }
+        }
         // ==================== 彈窗編輯處理 ====================
         function parseFlexibleDate(dateStr) {
             if (!dateStr) return "";
