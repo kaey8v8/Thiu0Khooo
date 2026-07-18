@@ -1,16 +1,20 @@
 name: Build and Deploy
 
 on:
-  push:
-    branches: [ "main" ]
+  push: # 🌟 不管什麼分支，只要有 push 就強制執行
 
 permissions:
-  contents: write # 給寫入權限，才能把改好的檔案推回 GitHub
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -22,10 +26,15 @@ jobs:
       run: |
         find . -name "supabase-config.js" -exec sed -i "s#__SUPABASE_URL__#$MY_URL#g" {} +
         find . -name "supabase-config.js" -exec sed -i "s#__SUPABASE_ANON_KEY__#$MY_KEY#g" {} +
+        
+        echo "=== 驗證虛擬機內檔案已修改 ==="
+        head -n 5 ./supabase-config.js
 
-    # 自動開一個 gh-pages 分支並把檔案丟上去
-    - name: Deploy to GitHub Pages Branch
-      uses: JamesIves/github-pages-deploy-action@v4
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
       with:
-        folder: .
-        branch: gh-pages
+        path: '.'
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
