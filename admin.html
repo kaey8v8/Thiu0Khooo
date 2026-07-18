@@ -907,7 +907,7 @@
             const report = allPendingItems.find(i => i.id === reportId);
             if (!report) return;
             // 取得當前登入的管理員資料 (假設 metadata 存有名稱，若無則改用 email)
-            const { data: { user } } = await supabaseClient.auth.getUser();
+            const { data: { user } } = await supabase.auth.getUser();
             const adminName = user?.user_metadata?.name || user?.email || "管理員";
             
             const targetTable = report.target_type === 'drink' ? 'drink_submissions' : 'event_submissions';
@@ -931,14 +931,14 @@
         
             try {
                 // 插入到正式表
-                const { error: insertError } = await supabaseClient
+                const { error: insertError } = await supabase
                     .from(targetTable)
                     .insert([newEntry]);
                 
                 if (insertError) throw insertError; // 檢查插入是否成功
             
                 // 將狀態改為 'approved'
-                const { error: updateError } = await supabaseClient
+                const { error: updateError } = await supabase
                     .from('issue_reports')
                     .update({ 
                         status: 'approved',
