@@ -6,7 +6,7 @@
     <title>7-11 飲料抽抽樂情報站</title>
     <!-- 使用 Tailwind CSS 快速美化手機排版 -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 引入 Supabase 官方 CDN 腳本 -->
+    <!-- Supabase JS -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <!-- 共用AnonKey -->
     <script src="supabase-config.js"></script>
@@ -40,7 +40,9 @@
                 <button id="viewTabEvent" onclick="globalSwitch('event')" class="flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition">
                     🎁 品牌登錄活動
                 </button>
-                <!-- 新增：等待審核清單分頁按鈕 -->
+                <button id="viewTabLucky" onclick="globalSwitch('lucky')" class="flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition">
+                    🎰 飲料抽抽樂
+                </button>
                 <button id="viewTabPending" onclick="globalSwitch('pending')" class="flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition">
                     📝 待確認
                 </button>
@@ -164,7 +166,9 @@
                         </tbody>
                     </table>
                 </div>
-
+                <div id="luckyViewSection" class="hidden space-y-4 max-w-2xl mx-auto">
+                    <!-- 內容將由 JavaScript 動態渲染 -->
+                </div>
             </div>
         </section>
     </main>
@@ -372,9 +376,6 @@
 
     <!-- 核心 -->
     <script>
-        // const supabaseUrl = '__SUPABASE_URL__';
-        // const supabaseAnonKey = '__SUPABASE_ANON_KEY__';
-        // const supabase = supabase.createClient(supabaseUrl, supabaseAnonKey);
         
         let allDrinks = [];
         let allEvents = [];
@@ -401,8 +402,8 @@
             try {
                 // 原有 approved 資料抓取
                 const [drinkRes, eventRes] = await Promise.all([
-                    supabase.from('drink_submissions').select('*').eq('status', 'approved'),
-                    supabase.from('event_submissions').select('*').eq('status', 'approved')
+                    supabaseClient.from('drink_submissions').select('*').eq('status', 'approved'),
+                    supabaseClient.from('event_submissions').select('*').eq('status', 'approved')
                 ]);
 
                 allDrinks = drinkRes.data || [];
@@ -410,20 +411,45 @@
 
                 // 獲取狀態為 pending 的飲料、活動與勘誤回報
                 await fetchPendingData();
-
+                
+                // 抽出來寫的讚數載入與合併函數
+                await loadAndMergeLikes();
+                
                 filterAndRender();
             } catch (e) {
                 console.error(e);
             }
         }
+        // 🌟 獨立處理：分開讀取不太重要的讚數資料，並合併回核心數據
+        async function loadAndMergeLikes() {
+            try {
+                // 單獨讀取讚數資料表
+                const { data: rawLikes, error } = await supabaseClient
+                    .from('drink_likes_counter')
+                    .select('*');
+                
+                if (error) throw error;
+                if (!rawLikes || rawLikes.length === 0) return;
 
+                // 將讀取到的讚數，配對合併進核心的 allDrinks 陣列中
+                allDrinks = allDrinks.map(drink => {
+                    const matchLike = rawLikes.find(l => l.id === drink.id);
+                    return {
+                        ...drink,
+                        likes: matchLike ? matchLike.likes : 0 // 沒被按過讚的預設就是 0
+                    };
+                });
+            } catch (err) {
+                console.error("載入讚數獨立表失敗，改以預設 0 讚顯示:", err);
+            }
+        }
         // 拉取所有狀態為 pending 的資料並進行格式統一
         async function fetchPendingData() {
             try {
                 const [drinkPend, eventPend, issuePend] = await Promise.all([
-                    supabase.from('drink_submissions').select('*').eq('status', 'pending'),
-                    supabase.from('event_submissions').select('*').eq('status', 'pending'),
-                    supabase.from('issue_reports').select('*').eq('status', 'pending')
+                    supabaseClient.from('drink_submissions').select('*').eq('status', 'pending'),
+                    supabaseClient.from('event_submissions').select('*').eq('status', 'pending'),
+                    supabaseClient.from('issue_reports').select('*').eq('status', 'pending')
                 ]);
 
                 const drinks = (drinkPend.data || []).map(item => ({
@@ -1147,7 +1173,7 @@
                 }
         
                 // 改為一律寫入 issue_reports 表
-                const { error } = await supabase.from('issue_reports').insert([payload]);
+                const { error } = await supabaseClient.from('issue_reports').insert([payload]);
                 
                 if (error) throw error;
         
@@ -1378,7 +1404,7 @@
                     payload.event_detail = document.getElementById('issueEventDetail').value.trim() || null;
                 }
 
-                const { error } = await supabase.from('issue_reports').insert([payload]);
+                const { error } = await supabaseClient.from('issue_reports').insert([payload]);
                 if (error) throw error;
 
                 alert("🚨 勘誤回報成功！管理員已收到修正資訊。");
@@ -1394,6 +1420,384 @@
         });
 
         window.onload = initData;
+        // ==========================================
+        // 🌟 全局變數定義與初始化整合
+        // ==========================================
+        let eventSchedulesData = null; // 存放從 GitHub 載入的完整活動資訊表
+
+        // 網頁載入時的總初始化
+        window.onload = async function() {
+            // 1. 執行原本 Supabase 資料的初始化
+            await initData();
+            
+            // 2. 執行從 GitHub 背景載入完整活動資訊表
+            await loadEventSchedules();
+        };
+
+        // 從 GitHub 非同步載入活動資訊表 JSON
+        async function loadEventSchedules() {
+            try {
+                // ⚠️ Raw 原始網址
+                const gitHubRawUrl = "https://raw.githubusercontent.com/kaey8v8/Thiu0Khooo/refs/heads/main/event_schedules.json";
+                const response = await fetch(gitHubRawUrl);
+                eventSchedulesData = await response.json();
+                console.log("🎯 成功從 GitHub 載入完整活動資訊表");
+            } catch (error) {
+                console.error("無法載入活動資訊表，啟用在地緊急預備值", error);
+                // 至少提供一筆基本時程
+                eventSchedulesData = {
+                    title: "7-11 天天抽飲料 ~ 9/1",
+                    links: { "line": "https://wooo.tw/qFjU69V", "app": "https://wooo.tw/PRckgXA" },
+                    timelines: [{ "end": "2026-09-01T19:00:00", "activeStr": "9/1(19:00)", "redeemStr": "9/1(23:59)" }],
+                    partner_activities: [],
+                    notices: [
+                        { "icon": "💡", "text": "確認金額、品項、抽抽樂折扣沒問題，再出示各種支付方式給店員刷。", "isRed": false },
+                        { "icon": "🚨", "text": "如果發現有誤再麻煩好心人送出勘誤資訊，管理員會盡快處理。", "isRed": false },
+                        { "icon": "⚠️", "text": "本資料表為多人心血，請勿用於營利。", "isRed": true }
+                    ],
+                    discounts: [],
+                    point_rewards: []
+                };
+            }
+        }
+
+        // 🌟 修復：自動比對當前時間，抓出符合的活動區間資訊
+        function getCurrentTimeline(timelines) {
+            if (!timelines || timelines.length === 0) return { activeStr: "載入中...", redeemStr: "載入中..." };
+            const now = new Date();
+            // 尋找第一個當前時間尚未超過結束時間的活動時程
+            let match = timelines.find(t => now <= new Date(t.end));
+            // 如果所有活動時間都過期了，預設回傳最後一筆
+            return match || timelines[timelines.length - 1];
+        }
+
+        // ==========================================
+        // 🌟 頁面切換與渲染邏輯
+        // ==========================================
+        function globalSwitch(type) {
+            currentView = type;
+            const isDrink = type === 'drink';
+            const isEvent = type === 'event';
+            const isPending = type === 'pending';
+            const isLucky = type === 'lucky';
+            
+            // 分頁主容器顯示切換
+            document.getElementById('drinkViewSection').classList.toggle('hidden', !isDrink);
+            document.getElementById('eventViewSection').classList.toggle('hidden', !isEvent);
+            document.getElementById('pendingViewSection').classList.toggle('hidden', !isPending);
+            document.getElementById('luckyViewSection').classList.toggle('hidden', !isLucky);
+            
+            // 篩選按鈕與控制列控制
+            document.getElementById('toggleFilterBtn').classList.toggle('hidden', !isDrink);
+            document.getElementById('eventSortContainer').classList.toggle('hidden', !isEvent);
+            
+            // 抽抽樂分頁不顯示上方的搜尋與新增控制列
+            document.getElementById('searchBarControls').classList.toggle('hidden', isLucky);
+        
+            if (!isDrink) {
+                const container = document.getElementById('drinkCollapseFilterContainer');
+                container.style.maxHeight = '0px';
+                container.classList.remove('border', 'border-gray-200', 'mt-2');
+                document.getElementById('toggleArrow').style.transform = 'rotate(0deg)';
+            }
+            
+            // 分頁按鈕樣式切換
+            document.getElementById('viewTabDrink').className = isDrink ? "flex-1 py-3 text-center text-sm font-bold border-b-2 border-green-500 text-green-600 transition" : "flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition";
+            document.getElementById('viewTabEvent').className = isEvent ? "flex-1 py-3 text-center text-sm font-bold border-b-2 border-blue-500 text-blue-600 transition" : "flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition";
+            document.getElementById('viewTabPending').className = isPending ? "flex-1 py-3 text-center text-sm font-bold border-b-2 border-amber-500 text-amber-600 transition" : "flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition";
+            document.getElementById('viewTabLucky').className = isLucky ? "flex-1 py-3 text-center text-sm font-bold border-b-2 border-purple-500 text-purple-600 transition" : "flex-1 py-3 text-center text-sm font-medium border-b-2 border-transparent text-gray-400 transition";
+            
+            const openCreateBtn = document.getElementById('openCreateBtn');
+            if (isDrink) {
+                document.getElementById('drinkForm').classList.remove('hidden');
+                document.getElementById('eventForm').classList.add('hidden');
+                document.getElementById('createModalTitle').innerText = "✍️ 發現漏網商品？歡迎新增！";
+                openCreateBtn.className = "bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition whitespace-nowrap shadow-xs inline-flex items-center justify-center";
+            } else if (isEvent) {
+                document.getElementById('drinkForm').classList.add('hidden');
+                document.getElementById('eventForm').classList.remove('hidden');
+                document.getElementById('createModalTitle').innerText = "✍️ 發現漏網活動？歡迎新增！";
+                openCreateBtn.className = "bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition whitespace-nowrap shadow-xs inline-flex items-center justify-center";
+            } else {
+                openCreateBtn.className = "hidden";
+            }
+            
+            document.getElementById('searchInput').value = "";
+            clearDrinkFilters();
+        
+            // 如果切換到抽抽樂，動態渲染內容
+            if (isLucky) {
+                renderLuckyTab();
+            }
+        }
+
+        // 全動態渲染「飲料抽抽樂」頁籤的函數
+        function renderLuckyTab() {
+            const container = document.getElementById('luckyViewSection');
+            
+            if (!eventSchedulesData) {
+                container.innerHTML = `<p class="text-xs text-gray-400 text-center py-8">活動資訊表同步中...</p>`;
+                return;
+            }
+        
+            const period = getCurrentTimeline(eventSchedulesData.timelines);
+        
+            // 動態生成搭配活動
+            const partnerHTML = eventSchedulesData.partner_activities.map(act => `
+                <div class="p-3 sm:flex justify-between items-start gap-4 hover:bg-gray-50/80 transition">
+                    <span class="font-bold text-gray-800 shrink-0 block sm:w-28 mb-1 sm:mb-0">${act.name}</span>
+                    <span class="text-blue-600 font-semibold shrink-0 block sm:w-36 mb-1 sm:mb-0">${act.duration}</span>
+                    <span class="text-gray-600 flex-1">${act.desc}</span>
+                </div>
+            `).join('');
+        
+            // 動態生成溫馨提示與警語區
+            const noticesHTML = eventSchedulesData.notices.map(notice => `
+                <p class="${notice.isRed ? 'text-red-500 font-bold' : ''}">
+                    ${notice.icon} ${notice.text}
+                </p>
+            `).join('');
+        
+            // 動態生成活動獎項
+            const discountsHTML = eventSchedulesData.discounts.map(disc => {
+                const isCoupon = disc.type.includes('折價券');
+                return `
+                    <div class="grid grid-cols-3 p-2.5 px-3 hover:bg-gray-50 transition ${isCoupon ? 'bg-red-50/20' : ''}">
+                        <div class="${isCoupon ? 'font-bold text-red-900' : 'text-gray-500'}">${disc.type}</div>
+                        <div class="col-span-2 pl-3 border-l border-gray-100 ${isCoupon ? 'text-[11px] text-red-600 leading-relaxed' : 'font-semibold text-gray-800'}">
+                            ${disc.value}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        
+            // 動態生成集點獎項 
+            const pointsHTML = eventSchedulesData.point_rewards.map(reward => `
+                <div class="flex p-3 hover:bg-gray-50 transition gap-4 text-sm">
+                    <div class="w-12 shrink-0 font-bold text-amber-600">${reward.points}</div>
+                    <div class="flex-1 text-gray-700 font-medium space-y-1 border-l border-gray-100 pl-4 leading-relaxed">
+                        ${reward.items.map(item => `<p>${item.startsWith('🚗') ? item : '• ' + item}</p>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+            // 動態生成不參與活動品項 (RWD 佈局：手機單欄、電腦六欄)
+            const excludedHTML = eventSchedulesData.excluded_categories.map(cat => `
+                <div class="space-y-2 bg-gray-50/50 p-3 rounded-xl border border-gray-100">
+                    <div class="font-bold text-gray-800 text-xs border-b border-gray-200 pb-1.5 flex items-center justify-between">
+                        <span>📂 ${cat.name}</span>
+                        <span class="text-[10px] bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded-full font-normal">${cat.items.length} 項</span>
+                    </div>
+                    <ul class="text-[11px] text-gray-500 space-y-1 list-none pl-0">
+                        ${cat.items.map(item => `<li class="break-all py-0.5 border-b border-dashed border-gray-100 last:border-0">• ${item}</li>`).join('')}
+                    </ul>
+                </div>
+            `).join('');
+            
+            // 渲染主結構
+            container.innerHTML = `
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden p-4 sm:p-6 space-y-6 text-left">
+                    <div class="bg-black text-white text-center py-2.5 font-bold rounded-lg text-sm tracking-wide shadow-sm">
+                        ${eventSchedulesData.title}
+                    </div>
+        
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <a href="${eventSchedulesData.links.line}" target="_blank" class="bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 text-center py-3 rounded-xl font-black text-base transition block shadow-xs tracking-wider">
+                            🟢 LINE 抽兩次 ➔
+                        </a>
+                        <a href="${eventSchedulesData.links.app}" target="_blank" class="bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-center py-3 rounded-xl font-black text-base transition block shadow-xs tracking-wider">
+                            🟠 APP 抽兩次 ➔
+                        </a>
+                    </div>
+        
+                    <!-- 調整後的當期活動時間與兌換時間區塊 -->
+                    <div class="border border-gray-200 rounded-xl overflow-hidden shadow-xs">
+                        <div class="grid grid-cols-2 bg-gray-900 text-white text-center text-[11px] font-bold py-2">
+                            <div>當期活動時間</div>
+                            <div class="border-l border-gray-700">兌換時間</div>
+                        </div>
+                        <div class="grid grid-cols-2 text-center text-lg font-black py-3 bg-gray-50 text-amber-600 font-mono tracking-wide">
+                            <div>~${period.activeStr}</div>
+                            <div class="border-l border-gray-200">~${period.redeemStr}</div>
+                        </div>
+                    </div>
+        
+                    <div class="border border-gray-200 rounded-xl overflow-hidden shadow-xs">
+                        <div class="bg-gray-900 text-white text-center text-[11px] font-bold py-2">搭配活動</div>
+                        <div class="divide-y divide-gray-200 text-xs bg-white">${partnerHTML}</div>
+                    </div>
+        
+                    <div class="bg-amber-50/60 border border-amber-100 rounded-xl p-3.5 text-xs text-gray-600 space-y-1 leading-relaxed">
+                        ${noticesHTML}
+                    </div>
+        
+                    <div class="border border-gray-200 rounded-xl overflow-hidden shadow-xs">
+                        <div class="grid grid-cols-3 bg-gray-900 text-white text-[11px] font-bold py-2 px-3">
+                            <div class="col-span-1">商品</div>
+                            <div class="col-span-2 border-l border-gray-700 pl-3">折扣 (價低者折)</div>
+                        </div>
+                        <div class="divide-y divide-gray-200 text-xs bg-white">${discountsHTML}</div>
+                    </div>
+        
+                    <div class="border border-gray-200 rounded-xl overflow-hidden shadow-xs">
+                        <div class="bg-gray-900 text-white text-center text-[11px] font-bold py-2">集點獎項 (集點 ~9/1 ； 兌換 ~9/3)</div>
+                        <div class="md:flex divide-y md:divide-y-0 md:divide-x divide-gray-200 bg-white">
+                            <div class="flex-1 divide-y divide-gray-150">${pointsHTML}</div>
+                            <div class="p-4 bg-gray-50 md:w-28 shrink-0 flex items-center justify-center text-center font-bold text-red-500 border-t md:border-t-0 text-[11px]">
+                                🔒 一帳限定 25 組
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 🌟 不參與活動品項（折疊） -->
+                    <div class="border border-gray-200 rounded-xl overflow-hidden shadow-xs bg-white">
+                        <!-- 點擊切換的 Header -->
+                        <button onclick="document.getElementById('excludedContent').classList.toggle('hidden'); this.querySelector('.arrow').classList.toggle('rotate-180')" 
+                                class="w-full flex justify-between items-center bg-gray-900 hover:bg-gray-800 text-white text-[11px] font-bold py-3 px-4 transition-colors">
+                            <span>⚠️ 以下品項不參與本次活動 (點擊展開/收合)</span>
+                            <span class="arrow transition-transform duration-200 text-xs text-gray-400">▼</span>
+                        </button>
+                        
+                        <!-- 內容區：預設隱藏 hidden 手機版自動單欄垂直排 -->
+                        <div id="excludedContent" class="hidden p-4 bg-white border-t border-gray-100">
+                            <!-- 🌟 在平板與電腦版都固定為最多3欄 -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                ${excludedHTML}
+                            </div>
+                            <div class="mt-3 text-[10px] text-red-500 text-right">
+                                ※ 實際不參與門市與品項依官方公告為準。
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        // ==========================================
+        // 🌟 愛心計數器與商品列表渲染
+        // ==========================================
+        // 處理按讚按鈕點擊 (串接獨立的 drink_likes_counter 表)
+        async function toggleLikeDrink(id) {
+            const storageKey = `liked_drink_${id}`;
+            if (localStorage.getItem(storageKey)) {
+                alert("❤️ 您已經對這個商品按過讚囉！");
+                return;
+            }
+        
+            const drink = allDrinks.find(d => d.id === id);
+            if (!drink) return;
+        
+            // 1. 前端即時數值累加 (Optimistic UI)
+            drink.likes = (drink.likes || 0) + 1;
+            filterAndRender();
+        
+            // 2. 寫入 LocalStorage 防止重複點選
+            localStorage.setItem(storageKey, 'true');
+        
+            try {
+                // 3. 嘗試直接更新讚數表
+                const { data, error: updateError } = await supabaseClient
+                    .from('drink_likes_counter')
+                    .update({ likes: drink.likes })
+                    .eq('id', id)
+                    .select();
+                
+                if (updateError) throw updateError;
+                
+                // 4. 如果更新後發現沒這筆資料 (代表是第一次有人對這品項按讚)，則進行全新插入
+                if (!data || data.length === 0) {
+                    const { error: insertError } = await supabaseClient
+                        .from('drink_likes_counter')
+                        .insert([{ id: id, likes: drink.likes }]);
+                    
+                    if (insertError) throw insertError;
+                }
+                
+            } catch (err) {
+                console.error("更新讚數失敗:", err);
+                // 若資料庫寫入失敗，則回滾前端數值
+                drink.likes -= 1;
+                localStorage.removeItem(storageKey);
+                filterAndRender();
+                alert("讚數同步失敗，請稍後再試！");
+            }
+        }
+        
+        function renderDrinks(data) {
+            const container = document.getElementById('drinkViewSection');
+            if (data.length === 0) {
+                container.innerHTML = `<p class="col-span-full text-xs text-gray-400 text-center py-4">沒有找到相關飲料商品</p>`;
+                return;
+            }
+            container.innerHTML = data.map(item => {
+                const categoryTagsArr = item.category_tags ? item.category_tags.split(',') : [];
+                const categoryTagsHTML = categoryTagsArr.map(t => 
+                    `<span class="bg-gray-200 text-gray-600 text-[10px] px-1.5 py-0.5 rounded font-medium inline-block align-middle">${t.trim()}</span>`
+                ).join(' ');
+        
+                let originalBadgesHTML = '';
+                let cleanRemark = item.remark || '無備註說明';
+        
+                if (item.remark && item.remark.includes('[') && item.remark.includes(']')) {
+                    const match = item.remark.match(/\[(.*?)\]/);
+                    if (match) {
+                        const origTags = match[1].split(',').map(t => t.trim());
+                        originalBadgesHTML = origTags.map(t => 
+                            `<span class="bg-amber-100 text-amber-700 border border-amber-200 text-[10px] px-1.5 py-0.5 rounded font-medium inline-block">${t}</span>`
+                        ).join(' ');
+                        
+                        cleanRemark = item.remark.replace(/\[.*?\]\s*\|\s*/, '').replace(/\[.*?\]/, '').trim();
+                        cleanRemark = `[${match[1]}] ${cleanRemark || '無'}`;
+                    }
+                }
+        
+                const authorHTML = item.user_name 
+                    ? `<span class="text-[10px] text-gray-400 font-normal truncate max-w-[48px]" title="${item.user_name}">${item.user_name}</span>`
+                    : `<span class="text-[10px] text-gray-300 font-normal italic">匿名</span>`;
+        
+                const hasLiked = localStorage.getItem(`liked_drink_${item.id}`);
+                const heartColorClass = hasLiked ? 'text-red-500 fill-current' : 'text-gray-400 hover:text-red-500';
+                const likesCount = item.likes || 0;
+        
+                return `
+                    <div class="p-4 bg-gray-50 rounded-xl border border-gray-200 flex justify-between gap-3 hover:bg-gray-100/70 transition shadow-xs text-left relative">
+                      <div class="flex-1 min-w-0 space-y-1.5">
+                          <div class="font-bold text-gray-800 text-sm flex justify-between items-start gap-2">
+                              <div class="flex items-center flex-wrap gap-1.5 flex-1 min-w-0">
+                                  <span class="truncate">${item.name}</span>
+                                  ${categoryTagsHTML}
+                              </div>
+                              <span class="text-green-600 shrink-0 font-extrabold whitespace-nowrap">${item.price} 元</span>
+                          </div>
+                          ${originalBadgesHTML ? `<div class="flex flex-wrap gap-1">${originalBadgesHTML}</div>` : ''}
+                          <div class="text-xs text-gray-400 break-all bg-white/60 p-2 rounded border border-gray-150 mt-1 max-h-[50px] overflow-y-auto"> 
+                              ${cleanRemark}
+                          </div>
+                      </div>
+                      
+                      <div class="flex flex-col items-center justify-between shrink-0 w-12 text-center py-0.5 border-l border-gray-200/60 pl-2">
+                          <button onclick="openIssueModal('drink', ${item.id})" 
+                                  class="text-red-500 hover:text-red-600 hover:scale-110 active:scale-95 transition-all p-0.5 cursor-pointer" 
+                                  title="資訊勘誤 🚨">
+                              <svg class="w-4 h-4 inline-block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 -1v3M2.79 2.79l2.12 2.12M21.21 2.79l-2.12 2.12" />
+                                <path d="M19 12a7 7 0 0 0-14 0v4h14v-4z" fill="currentColor" fill-opacity="0.1" />
+                                <rect x="3" y="16" width="18" height="3" rx="1" fill="currentColor" fill-opacity="0.2" />
+                            </svg>
+                          </button>
+                          
+                          <button onclick="toggleLikeDrink(${item.id})" 
+                                  class="${heartColorClass} hover:scale-120 active:scale-90 transition-all p-0.5 cursor-pointer flex flex-col items-center justify-center group" 
+                                  title="喜歡這個商品♥️">
+                              <svg class="w-4 h-4 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                              </svg>
+                              <span class="text-[10px] font-extrabold font-mono mt-0.5 text-gray-500 group-hover:text-red-500">${likesCount}</span>
+                          </button>
+                          
+                          ${authorHTML}
+                      </div>
+                  </div>
+              `;
+            }).join('');
+        }
     </script>
 </body>
 </html>
